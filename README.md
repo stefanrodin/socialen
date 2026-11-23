@@ -177,3 +177,5 @@ mv -Tf .current.restore current
 Samordna manuell återställning med `deploy/deploy.lock` och `storage/worker.lock` om ett deploy- eller publiceringsjobb pågår. Kodåterställning ändrar inte databasen eller redan publicerade inlägg.
 
 För första serveruppsättningen körs `bash deploy/bootstrap-inleed.sh` från en utpackad, verifierad Git-revision på Inleed. Skriptet behåller nuvarande kod som första version, säkerhetskopierar tidigare kataloger och lägger till den publika Actions-nyckeln. Den fasta servermottagaren uppdateras med samma bootstrap-skript vid framtida ändringar i deploykontraktet.
+
+Workflowet `Initialize Inleed autodeploy` är en manuell engångsuppsättning. Det kräver den tillfälliga Actions-hemligheten `SOCIALEN_BOOTSTRAP_SSH_KEY` med en befintlig SSH-nyckel för kontot. Hemligheten tas bort efter körningen. Den vanliga automatiken använder enbart `SOCIALEN_SSH_KEY`, som är bunden till det fasta deploykommandot på servern.
