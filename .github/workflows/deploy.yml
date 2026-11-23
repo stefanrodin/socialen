@@ -1,0 +1,87 @@
+name: Test and deploy Socialen
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: socialen-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-test-only
+          MYSQL_DATABASE: publicera_test_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@d52fc211a0436f8839a587b3b5b8efddab4744ea # v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, pdo_sqlite, curl, sodium, mbstring, fileinfo, gd, exif
+          coverage: none
+          tools: none
+      - name: Check syntax
+        run: |
+          git ls-files -z '*.php' | xargs -0 -n1 php -l
+          node --check public/assets/app.js
+          bash -n bin/*.sh deploy/*.sh
+      - name: Workflow tests on SQLite
+        run: php tests/run.php
+      - name: Workflow tests on MySQL
+        env:
+          PUBLICERA_TEST_DSN: mysql:host=127.0.0.1;port=3306;dbname=publicera_test_ci;charset=utf8mb4
+          PUBLICERA_TEST_USER: root
+          PUBLICERA_TEST_PASSWORD: ci-test-only
+        run: php tests/run.php
+      - name: HTTP workflows
+        run: python3 tests/http_flow.py
+      - name: Deployment and rollback tests
+        run: python3 tests/deploy_flow.py
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Package tested revision
+        run: bash bin/package-release.sh "$RUNNER_TEMP/socialen.tar.gz"
+      - name: Deploy to Inleed
+        env:
+          SOCIALEN_SSH_KEY: ${{ secrets.SOCIALEN_SSH_KEY }}
+          SOCIALEN_KNOWN_HOSTS: ${{ secrets.SOCIALEN_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$RUNNER_TEMP/socialen-ssh"
+          trap 'rm -f "$RUNNER_TEMP/socialen-ssh/key" "$RUNNER_TEMP/socialen-ssh/known_hosts"' EXIT
+          printf '%s\n' "$SOCIALEN_SSH_KEY" > "$RUNNER_TEMP/socialen-ssh/key"
+          printf '%s\n' "$SOCIALEN_KNOWN_HOSTS" > "$RUNNER_TEMP/socialen-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/socialen-ssh/key" "$RUNNER_TEMP/socialen-ssh/known_hosts"
+          ssh -T -4 -p 2020 -i "$RUNNER_TEMP/socialen-ssh/key" \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/socialen-ssh/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            rondit@prime3.inleed.net deploy < "$RUNNER_TEMP/socialen.tar.gz"

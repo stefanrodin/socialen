@@ -1,0 +1,13 @@
+
+# Socialen HTTPS
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+RewriteRule ^ https://socialen.rondit.se%{REQUEST_URI} [R=302,L,NE]
+</IfModule>
+# Socialen upload limits
+<IfModule LiteSpeed>
+php_value upload_max_filesize 100M
+php_value post_max_size 110M
+</IfModule>

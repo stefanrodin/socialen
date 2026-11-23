@@ -1,0 +1,5 @@
+Options -Indexes
+<FilesMatch "^(config.*\.php|composer\..*|README.*|.*\.sqlite.*)$">
+  Require all denied
+</FilesMatch>
+RedirectMatch 404 ^/(src|bin|tests|storage)/

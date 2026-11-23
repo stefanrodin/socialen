@@ -1,0 +1,12 @@
+/config.php
+/storage/*
+!/storage/.gitkeep
+*.zip
+*.sqlite
+*.sqlite-*
+.env
+.env.*
+/preview.jpg
+.DS_Store
+__pycache__/
+*.pyc
