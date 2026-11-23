@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix='socialen-deploy-test-') as directory:
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
-    server = subprocess.Popen([php, '-d', 'realpath_cache_size=0', '-S', f'127.0.0.1:{port}', '-t', str(root)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    server = subprocess.Popen([php, '-d', 'realpath_cache_size=0', '-d', 'opcache.enable_cli=0', '-S', f'127.0.0.1:{port}', '-t', str(root)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     url = f'http://127.0.0.1:{port}/public_html'
     env = dict(os.environ, SSH_ORIGINAL_COMMAND='deploy')
     env.pop('PUBLICERA_DEMO', None)
@@ -75,6 +75,7 @@ with tempfile.TemporaryDirectory(prefix='socialen-deploy-test-') as directory:
         assert first.returncode == 0, (first.stdout, first.stderr)
         active = (root / 'current').resolve()
         assert active != initial
+        assert (active / 'REVISION').read_text().strip() == 'a' * 40
         assert (active / 'config.php').resolve() == root / 'config.php'
         assert (active / 'storage').resolve() == root / 'storage'
         assert 'Hosting settings retained' in (active / 'public/.htaccess').read_text()

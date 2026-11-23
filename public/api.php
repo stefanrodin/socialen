@@ -6,7 +6,8 @@ try {
     $app=app(); $app->session(); $method=$_SERVER['REQUEST_METHOD']; $action=$_GET['action']??'';
     if ($method==='GET' && $action==='bootstrap') {
         $user=$app->user();
-        $data=['user'=>$user,'csrf'=>$_SESSION['csrf'],'demo'=>$app->demo,'name'=>$app->config['name'],'timezone'=>$app->config['timezone'],'upload_limit_mb'=>$app->config['upload_limit_mb']];
+        $revision=is_file($app->root.'/REVISION')?trim((string)file_get_contents($app->root.'/REVISION')):null;
+        $data=['revision'=>$revision,'user'=>$user,'csrf'=>$_SESSION['csrf'],'demo'=>$app->demo,'name'=>$app->config['name'],'timezone'=>$app->config['timezone'],'upload_limit_mb'=>$app->config['upload_limit_mb']];
         if ($user) {
             $data['flash']=$_SESSION['flash']??null; unset($_SESSION['flash']);
             $last=$app->one("SELECT setting_value FROM settings WHERE setting_key='last_worker'");
