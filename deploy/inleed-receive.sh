@@ -55,7 +55,7 @@ if [[ -n "$resolve" ]]; then curl_options+=(--resolve "$resolve"); fi
 actual=$(curl "${curl_options[@]}" "$health_url/deploy-revision.txt?revision=$revision")
 [[ "$actual" == "$revision" ]] || { echo 'Served revision does not match.' >&2; exit 1; }
 bootstrap=$(curl "${curl_options[@]}" "$health_url/api.php?action=bootstrap")
-printf '%s' "$bootstrap" | "$php" -r '$d=json_decode(stream_get_contents(STDIN),true,flags:JSON_THROW_ON_ERROR); if (!is_array($d)||!array_key_exists("user",$d)||$d["user"]!==null||($d["demo"]??true)!==false||($d["revision"]??null)!==$argv[1]) exit(1);' "$revision"
+printf '%s' "$bootstrap" | "$php" -r '$d=json_decode(stream_get_contents(STDIN),true,flags:JSON_THROW_ON_ERROR); if (!is_array($d)||!array_key_exists("user",$d)||$d["user"]!==null||($d["demo"]??true)!==false||($d["revision"]??null)!==$argv[1]) {fwrite(STDERR,"API health check failed; PHP revision does not match or response is unhealthy.\n"); exit(1);}' "$revision"
 completed=1
 printf 'Deployed %s; previous release: %s\n' "$revision" "$previous"
 # Releases are retained for manual rollback; this script never prunes backups.

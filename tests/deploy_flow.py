@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='socialen-deploy-test-') as directory:
     for name in ['src', 'bin', 'public']:
         shutil.copytree(source / name, initial / name)
     key = base64.b64encode(os.urandom(32)).decode()
-    config = "<?php return ['name'=>'Test','url'=>'https://socialen.example','timezone'=>'Europe/Stockholm','key'=>'%s','database'=>['dsn'=>'sqlite:%s/storage/test.sqlite'],'upload_limit_mb'=>100,'google'=>[],'meta'=>[]];" % (key, root)
+    config = "<?php return ['name'=>'Test','url'=>'https://socialen.example','timezone'=>'Europe/Stockholm','key'=>'%s','database'=>['dsn'=>'sqlite:%s/storage/test.sqlite','user'=>null,'password'=>null],'upload_limit_mb'=>100,'google'=>[],'meta'=>[]];" % (key, root)
     (root / 'config.php').write_text(config)
     (initial / 'config.php').symlink_to(root / 'config.php')
     (initial / 'storage').symlink_to(root / 'storage')
@@ -41,7 +41,11 @@ with tempfile.TemporaryDirectory(prefix='socialen-deploy-test-') as directory:
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
-    server = subprocess.Popen([php, '-d', 'realpath_cache_size=0', '-d', 'opcache.enable_cli=0', '-S', f'127.0.0.1:{port}', '-t', str(root)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Resolve the release for every request, as the hosting web server must do.
+    # PHP's development server otherwise retains symlinked script paths across requests.
+    router = root / 'router.php'
+    router.write_text('<?php $root=' + json.dumps(str(root)) + '; $base=readlink($root."/current")."/public"; $path=parse_url($_SERVER["REQUEST_URI"],PHP_URL_PATH); if ($path==="/public_html/api.php") { require $base."/api.php"; } elseif ($path==="/public_html/deploy-revision.txt") { readfile($base."/deploy-revision.txt"); } else {http_response_code(404);}')
+    server = subprocess.Popen([php, '-d', 'realpath_cache_size=0', '-d', 'opcache.enable_cli=0', '-S', f'127.0.0.1:{port}', str(router)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     url = f'http://127.0.0.1:{port}/public_html'
     env = dict(os.environ, SSH_ORIGINAL_COMMAND='deploy')
     env.pop('PUBLICERA_DEMO', None)
