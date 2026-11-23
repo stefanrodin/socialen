@@ -45,7 +45,6 @@ if [[ ! -L "$root/current" ]]; then
     moved+=("$name")
     ln -s "$root/current/$target" "$root/$name"
   done
-  trap - EXIT
 fi
 for name in inleed-receive.sh hosting.htaccess; do
   [[ ! -e "$root/deploy/$name" ]] || cp -p "$root/deploy/$name" "$backup/$name"
