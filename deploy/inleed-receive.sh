@@ -13,7 +13,6 @@ resolve=${4:-}
 exec 9>"$root/deploy/deploy.lock"
 flock -w 90 9
 release=$(mktemp -d "$root/releases/release.XXXXXXXX")
-chmod 755 "$release"
 previous=$(readlink "$root/current")
 activated=0
 completed=0
@@ -31,13 +30,16 @@ cleanup() {
 trap cleanup EXIT
 # Input is the allowlisted archive built by bin/package-release.sh.
 tar -xzf - -C "$release" --no-same-owner --no-same-permissions
+# The staging archive must not make the release directory private to the SSH user.
+chmod 755 "$release"
 revision=$(cat "$release/REVISION")
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid revision.' >&2; exit 1; }
 [[ ! -e "$release/config.php" && ! -e "$release/storage" ]] || { echo 'Release contains private runtime files.' >&2; exit 1; }
 for file in public/index.php public/api.php src/bootstrap.php bin/worker.php; do
   [[ -f "$release/$file" ]] || { echo "Missing $file" >&2; exit 1; }
 done
-while IFS= read -r -d '' file; do "$php" -l "$file" >/dev/null; done < <(find "$release" -type f -name '*.php' -print0)
+find "$release" -type f -name '*.php' -print0 |
+  while IFS= read -r -d '' file; do "$php" -l "$file" >/dev/null; done
 ln -s -- "$root/config.php" "$release/config.php"
 ln -s -- "$root/storage" "$release/storage"
 cat "$root/deploy/hosting.htaccess" >> "$release/public/.htaccess"

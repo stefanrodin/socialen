@@ -53,6 +53,9 @@ with tempfile.TemporaryDirectory(prefix='socialen-deploy-test-') as directory:
     def bundle(revision, broken=False, private=False):
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode='w:gz') as archive:
+            # Reproduce a private mktemp staging directory in incoming archive metadata.
+            member = tarfile.TarInfo('.'); member.type = tarfile.DIRTYPE; member.mode = 0o700
+            archive.addfile(member)
             for name in ['src', 'bin', 'public']:
                 archive.add(source / name, arcname=name)
             for name, content in [('REVISION', revision + '\n')]:
@@ -79,6 +82,7 @@ with tempfile.TemporaryDirectory(prefix='socialen-deploy-test-') as directory:
         assert first.returncode == 0, (first.stdout, first.stderr)
         active = (root / 'current').resolve()
         assert active != initial
+        assert active.stat().st_mode & 0o777 == 0o755, 'Web server cannot traverse release directory'
         assert (active / 'REVISION').read_text().strip() == 'a' * 40
         assert (active / 'config.php').resolve() == root / 'config.php'
         assert (active / 'storage').resolve() == root / 'storage'
