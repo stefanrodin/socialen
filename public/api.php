@@ -7,8 +7,8 @@ try {
     if ($method==='GET' && $action==='bootstrap') {
         $user=$app->user();
         $revision=is_file($app->root.'/REVISION')?trim((string)file_get_contents($app->root.'/REVISION')):null;
-        $data=['revision'=>$revision,'user'=>$user,'csrf'=>$_SESSION['csrf'],'demo'=>$app->demo,'name'=>$app->config['name'],'timezone'=>$app->config['timezone'],'upload_limit_mb'=>$app->config['upload_limit_mb']];
-        if ($user) {
+        $data=['policy_version'=>Policies::VERSION,'policy_accepted'=>$user?$app->hasAcceptedPolicies():false,'revision'=>$revision,'user'=>$user,'csrf'=>$_SESSION['csrf'],'demo'=>$app->demo,'name'=>$app->config['name'],'timezone'=>$app->config['timezone'],'upload_limit_mb'=>$app->config['upload_limit_mb']];
+        if ($user && $app->hasAcceptedPolicies()) {
             $data['flash']=$_SESSION['flash']??null; unset($_SESSION['flash']);
             $last=$app->one("SELECT setting_value FROM settings WHERE setting_key='last_worker'");
             $data+=['posts'=>$app->posts(),'media'=>$app->mediaList(),'channels'=>$app->channels(),'last_worker'=>$last['setting_value']??null,'providers'=>[
@@ -20,19 +20,23 @@ try {
     }
     if ($method!=='POST') jsonResponse(['error'=>'Metoden stöds inte.'],405);
     $app->csrf();
-    if ($action==='upload') { $app->requireUser(); jsonResponse(['media'=>$app->upload($_FILES['file']??[])]); }
+    if ($action==='upload') { $app->requireUser(); $app->requirePolicies(); jsonResponse(['media'=>$app->upload($_FILES['file']??[])]); }
     if (!str_starts_with($_SERVER['CONTENT_TYPE']??'','application/json')) throw new UserError('Begäran behöver vara JSON.');
     $raw=file_get_contents('php://input',false,null,0,262145); if (strlen($raw)>262144) throw new UserError('Begäran är för stor.');
     $input=json_decode($raw,true,32,JSON_THROW_ON_ERROR); if (!is_array($input)) throw new UserError('Ogiltig begäran.');
-    if ($action==='login') { $app->login((string)($input['email']??''),(string)($input['password']??'')); jsonResponse(['ok'=>true]); }
+    if ($action==='login') { $app->login((string)($input['email']??''),(string)($input['password']??'')); if(in_array($input['accept_policies']??false,[true,'on'],true))$app->acceptPolicies((string)($input['policy_version']??'')); jsonResponse(['ok'=>true]); }
     $app->requireUser();
+    if(!in_array($action,['logout','disconnect','accept-policy'],true))$app->requirePolicies();
     switch ($action) {
+        case 'accept-policy': $app->acceptPolicies((string)($input['version']??'')); jsonResponse(['ok'=>true]);
         case 'logout': $_SESSION=[]; session_destroy(); jsonResponse(['ok'=>true]);
         case 'save': jsonResponse(['id'=>$app->savePost($input)]);
         case 'cancel': $app->cancelPost((int)($input['id']??0)); jsonResponse(['ok'=>true]);
         case 'connect': jsonResponse(['url'=>(new OAuth($app))->start((string)($input['provider']??''))]);
         case 'disconnect':
             if ($app->demo) throw new UserError('Demokanalerna kan inte kopplas från.');
+            $channel=$app->one('SELECT network FROM channels WHERE id=?',[(int)($input['id']??0)]);
+            if(($channel['network']??null)==='youtube')jsonResponse(['ok'=>true,'deletion_pending'=>!(new GoogleAccess($app))->disconnect((int)$input['id'])]);
             $app->query('UPDATE channels SET credentials=?,active=0 WHERE id=?',[$app->seal([]),(int)($input['id']??0)]); jsonResponse(['ok'=>true]);
         case 'reconcile':
             $id=(int)($input['id']??0); $row=$app->one('SELECT * FROM publications WHERE id=?',[$id]);

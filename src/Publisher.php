@@ -22,6 +22,7 @@ final class Publisher
         try {
             $this->deadline = microtime(true) + 45;
             $this->http->deadline($this->deadline);
+            try { (new GoogleAccess($this->app,$this->http))->maintainOne(); } catch(WorkerBudgetExpired|RemoteFailure) {}
             foreach ($this->app->all("SELECT * FROM publications WHERE status='processing'") as $old) {
                 $state = $old['state_json'] === '{}' ? [] : $this->app->unseal($old['state_json']);
                 $uncertain = !empty($state['in_flight']);
@@ -43,7 +44,7 @@ final class Publisher
                         $outcome=$this->step($job,$state,$assets); $this->checkpoint((int)$job['id'],$state);
                         if ($outcome==='published') break;
                     } while ($outcome==='continue' && microtime(true) < $this->deadline - 22);
-                    if ($outcome==='published') $this->app->query("UPDATE publications SET status='published',remote_id=?,remote_url=?,last_error=?,updated_at=? WHERE id=?",[$state['remote_id'],$state['remote_url']??null,$state['warning']??null,$this->app->now(),$job['id']]);
+                    if ($outcome==='published') $this->app->query("UPDATE publications SET status='published',remote_id=?,remote_url=?,last_error=?,state_json=?,updated_at=? WHERE id=?",[$state['remote_id'],$state['remote_url']??null,$state['warning']??null,$this->app->seal(['completed'=>true]),$this->app->now(),$job['id']]);
                     else $this->app->query("UPDATE publications SET status='pending',last_error=NULL,next_at=?,updated_at=? WHERE id=?",[gmdate('Y-m-d H:i:s',time()+15),$this->app->now(),$job['id']]);
                 } catch (Throwable $e) {
                     $uncertain = !empty($state['in_flight']) || ($e instanceof RemoteFailure && $e->uncertain);
@@ -72,17 +73,11 @@ final class Publisher
         return match ($job['network']) { 'youtube'=>$this->youtube($job,$state,$assets[0],$creds), 'instagram'=>$this->instagram($job,$state,$assets,$creds), 'facebook'=>$this->facebook($job,$state,$assets,$creds), default=>throw new UserError('Kanaltypen stöds inte.') };
     }
     private function youtube(array $job, array &$state, array $media, array $creds): string {
-        if (empty($creds['refresh_token'])) throw new UserError('Anslut YouTube igen: förnyelsetoken saknas.');
-        if (($creds['expires_at']??0)<time()+120) {
-            $config=$this->app->config['google'];
-            $token=$this->http->form('https://oauth2.googleapis.com/token',['client_id'=>$config['client_id'],'client_secret'=>$config['client_secret'],'refresh_token'=>$creds['refresh_token'],'grant_type'=>'refresh_token'])['json'];
-            if (empty($token['access_token'])) throw new UserError('Anslut YouTube igen: token kunde inte förnyas.');
-            $creds=array_merge($creds,$token,['expires_at'=>time()+(int)($token['expires_in']??3600)]);
-            $this->app->query('UPDATE channels SET credentials=? WHERE id=?',[$this->app->seal($creds),$job['channel_id']]);
-        }
+        $channel=$this->app->one('SELECT * FROM channels WHERE id=?',[$job['channel_id']]);
+        $creds=(new GoogleAccess($this->app,$this->http))->credentials($channel);
         $headers=['Authorization: Bearer '.$creds['access_token']]; $total=(int)$media['bytes'];
         if (!empty($state['remote_id'])) {
-            $video=$this->http->request('GET','https://www.googleapis.com/youtube/v3/videos?'.http_build_query(['part'=>'status,processingDetails','id'=>$state['remote_id']]),$headers)['json']['items'][0]??null;
+            $video=$this->http->request('GET','https://www.googleapis.com/youtube/v3/videos?'.http_build_query(['part'=>'status','fields'=>'items(id,status(uploadStatus))','id'=>$state['remote_id']]),$headers)['json']['items'][0]??null;
             if (!$video) throw new RemoteFailure('Den uppladdade YouTube-videon kunde inte hittas. Kontrollera kanalen.',true);
             $status=$video['status']['uploadStatus']??'';
             if (in_array($status,['failed','rejected','deleted'],true)) throw new UserError('YouTube stoppade den uppladdade videon: '.$status.'. Kontrollera den i YouTube Studio.');

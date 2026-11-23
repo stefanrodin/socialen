@@ -65,6 +65,21 @@ final class App
         $this->query('DELETE FROM login_attempts WHERE attempt_key=? OR last_at<?', [$key, gmdate('Y-m-d H:i:s', time() - 86400)]);
         session_regenerate_id(true); $_SESSION['user_id'] = (int)$user['id']; $_SESSION['last_active'] = time(); $_SESSION['csrf'] = bin2hex(random_bytes(32));
     }
+    public function hasAcceptedPolicies(): bool {
+        if ($this->demo) return true;
+        $user=$this->user();
+        return $user && ($this->one('SELECT setting_value FROM settings WHERE setting_key=?',['policies_user_'.$user['id']])['setting_value']??null)===Policies::VERSION;
+    }
+    public function acceptPolicies(string $version): void {
+        $user=$this->requireUser();
+        if ($version!==Policies::VERSION) throw new UserError('Policyn har uppdaterats. Ladda om sidan och läs den aktuella versionen.');
+        $key='policies_user_'.$user['id'];
+        if($this->one('SELECT setting_key FROM settings WHERE setting_key=?',[$key]))$this->query('UPDATE settings SET setting_value=? WHERE setting_key=?',[$version,$key]);
+        else $this->query('INSERT INTO settings(setting_key,setting_value) VALUES(?,?)',[$key,$version]);
+    }
+    public function requirePolicies(): void {
+        if(!$this->hasAcceptedPolicies())throw new UserError('Läs och godkänn integritetspolicyn och användarvillkoren innan du fortsätter.');
+    }
     public function migrate(): void {
         $id = $this->sqlite() ? 'INTEGER PRIMARY KEY AUTOINCREMENT' : 'BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT';
         $text = $this->sqlite() ? 'TEXT' : 'MEDIUMTEXT';

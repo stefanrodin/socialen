@@ -60,6 +60,10 @@ with tempfile.TemporaryDirectory(prefix='publicera-http-test-') as directory:
                 time.sleep(.05)
         else:
             raise RuntimeError('PHP test server did not become ready')
+        for page, marker in [('about.php', b'YouTube API Services'), ('privacy.php', b'Limited Use'), ('terms.php', b'https://www.youtube.com/t/terms'), ('data-deletion.php', b'myaccount.google.com/permissions')]:
+            page_status, _, page_body = request('GET', '/' + page, send_cookie=False)
+            assert page_status == 200 and marker in page_body
+            assert b'admin@example.se' not in page_body and key.encode() not in page_body
         status, headers, body = initial
         assert status == 200 and json.loads(body)['user'] is None
         flags = headers['Set-Cookie'].lower()
@@ -68,6 +72,15 @@ with tempfile.TemporaryDirectory(prefix='publicera-http-test-') as directory:
         csrf = json.loads(body)['csrf']
         assert request('POST', '/api.php?action=save', {'title': 'Blocked'})[0] == 422
         assert request('POST', '/api.php?action=save', {'title': 'Blocked'}, csrf)[0] == 422
+        status, headers, body = request('POST', '/api.php?action=login', {'email': 'admin@example.se', 'password': 'test-password-123'}, csrf)
+        assert status == 200
+        cookie = headers['Set-Cookie'].split(';')[0]
+        pending_policy = json.loads(request('GET', '/api.php?action=bootstrap')[2])
+        csrf = pending_policy['csrf']
+        assert pending_policy['policy_accepted'] is False and 'posts' not in pending_policy
+        assert request('POST', '/api.php?action=save', {'title': 'No consent'}, csrf)[0] == 422
+        assert request('POST', '/api.php?action=accept-policy', {'version': 'old'}, csrf)[0] == 422
+        assert request('POST', '/api.php?action=accept-policy', {'version': pending_policy['policy_version']}, csrf)[0] == 200
         status, headers, body = request('POST', '/api.php?action=login', {'email': 'admin@example.se', 'password': 'test-password-123'}, csrf)
         assert status == 200
         new_cookie = headers['Set-Cookie'].split(';')[0]

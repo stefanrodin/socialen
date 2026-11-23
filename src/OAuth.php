@@ -14,6 +14,7 @@ final class OAuth
         $_SESSION['oauth'] = ['provider' => $provider, 'state' => $state, 'expires' => time() + 600];
         $params = ['client_id' => $config[$provider === 'google' ? 'client_id' : 'app_id'], 'redirect_uri' => $this->callback($provider), 'response_type' => 'code', 'state' => $state];
         if ($provider === 'google') {
+            if($this->app->one("SELECT setting_key FROM settings WHERE setting_key LIKE 'google_delete_%' LIMIT 1"))throw new UserError('Radering av en Google-anslutning pågår. Slutför raderingen innan du ansluter Google igen.');
             $params += ['scope' => 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly', 'access_type' => 'offline', 'prompt' => 'consent'];
             return 'https://accounts.google.com/o/oauth2/v2/auth?' . http_build_query($params);
         }
@@ -42,10 +43,11 @@ final class OAuth
         $config = $this->app->config['google'];
         $token = $this->http->form('https://oauth2.googleapis.com/token', ['client_id'=>$config['client_id'],'client_secret'=>$config['client_secret'],'code'=>$code,'grant_type'=>'authorization_code','redirect_uri'=>$this->callback('google')])['json'];
         if (empty($token['access_token'])) throw new UserError('Google returnerade ingen åtkomsttoken.');
-        $identity = $this->http->request('GET','https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true',['Authorization: Bearer ' . $token['access_token']])['json'];
+        $identity = $this->http->request('GET','https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true&fields=items(id,snippet(title))',['Authorization: Bearer ' . $token['access_token']])['json'];
         $channel = $identity['items'][0] ?? null;
         if (!$channel) throw new UserError('Ingen YouTube-kanal hittades för kontot du valde.');
         $token['expires_at'] = time() + (int)($token['expires_in'] ?? 3600);
+        $token['api_checked_at'] = time();
         $this->save('youtube',$channel['id'],$channel['snippet']['title'],$token); return 1;
     }
     private function meta(string $code): int {

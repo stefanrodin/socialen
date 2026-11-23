@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 final class RemoteFailure extends RuntimeException
 {
-    public function __construct(string $message, public readonly bool $uncertain = false, public readonly int $status = 0) { parent::__construct($message); }
+    public function __construct(string $message, public readonly bool $uncertain = false, public readonly int $status = 0, public readonly ?string $errorCode = null) { parent::__construct($message); }
 }
 final class WorkerBudgetExpired extends RuntimeException {}
 
@@ -36,7 +36,7 @@ class Http
         if ($status >= 400) {
             $error = is_array($json) ? ($json['error']['message'] ?? $json['error_description'] ?? $json['error'] ?? '') : '';
             if (!is_string($error)) $error = '';
-            throw new RemoteFailure('Plattformen svarade HTTP ' . $status . ($error !== '' ? ': ' . mb_substr($error, 0, 500) : '.'), $method !== 'GET' && $status >= 500, $status);
+            throw new RemoteFailure('Plattformen svarade HTTP ' . $status . ($error !== '' ? ': ' . mb_substr($error, 0, 500) : '.'), $method !== 'GET' && $status >= 500, $status, is_array($json)&&is_string($json['error']??null)?$json['error']:null);
         }
         if (!is_array($json) && !in_array($status, [204,308], true)) throw new RemoteFailure('Plattformens svar gick inte att läsa.', $method !== 'GET', $status);
         return ['status' => $status, 'headers' => $responseHeaders, 'json' => is_array($json) ? $json : []];

@@ -5,6 +5,8 @@ require_once __DIR__ . '/App.php';
 require_once __DIR__ . '/Http.php';
 require_once __DIR__ . '/OAuth.php';
 require_once __DIR__ . '/Publisher.php';
+require_once __DIR__ . '/Policies.php';
+require_once __DIR__ . '/GoogleAccess.php';
 
 function app(): App
 {

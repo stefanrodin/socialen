@@ -179,3 +179,13 @@ Samordna manuell återställning med `deploy/deploy.lock` och `storage/worker.lo
 För första serveruppsättningen körs `bash deploy/bootstrap-inleed.sh` från en utpackad, verifierad Git-revision på Inleed. Skriptet behåller nuvarande kod som första version, säkerhetskopierar tidigare kataloger och lägger till den publika Actions-nyckeln. Den fasta servermottagaren uppdateras med samma bootstrap-skript vid framtida ändringar i deploykontraktet.
 
 Engångsuppsättningen körs från kontots befintliga SSH-terminal. Endast den nya publika Actions-nyckeln installeras på servern. Den befintliga privata arbetsnyckeln behöver aldrig lämna datorn.
+
+## Google, integritet och verifiering
+
+Publika verifieringssidor: `about.php`, `privacy.php`, `terms.php` och `data-deletion.php`. De kan läsas utan inloggning och databasanslutning. Inloggningen och arbetsytan länkar till dem. Administratören godkänner aktuell policyversion aktivt innan funktionerna öppnas. Google-konfiguration och plattformstoken lämnas utanför Git.
+
+Google-anslutningar kontrolleras även utan väntande publiceringar. Serverjobbet uppdaterar kanalidentitet och lagrade videoreferenser, återkallar och raderar vid frånkoppling och rensar Google-data efter bekräftat återkallad åtkomst eller när data inte kunnat hållas aktuell inom 30 dagar. En radering som tillfälligt inte kan återkallas hos Google pausas lokalt och försöks igen, högst i sju dagar. Egna inlägg och mediefiler tas inte bort; inlägg utan kvarvarande publiceringskoppling återgår till utkast. Videor på YouTube påverkas inte.
+
+Driftansvarig hanterar begäran om konto-/filradering och radering i egna respektive webbhotellets säkerhetskopior. Sådana kopior får inte återinföra återkallad åtkomst. Kontrollera backuphanteringen med driftleverantören vid en raderingsbegäran.
+
+För att ta bort testlägets sjudagarsgräns behöver Googles OAuth-app lämna Testing. Anslut kanalen igen efter statusbytet så att en ny förnyelsetoken hämtas. Brand- och eventuell scopeverifiering hanteras separat i Google Cloud; ett godkännande kan inte garanteras av dessa sidor.
