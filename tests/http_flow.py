@@ -90,6 +90,18 @@ with tempfile.TemporaryDirectory(prefix='publicera-http-test-') as directory:
         csrf = authenticated['csrf']
         assert authenticated['user']['email'] == 'admin@example.se'
         assert 'database' not in authenticated and 'key' not in authenticated
+        # Stage an encrypted OAuth discovery in the same temporary authenticated session.
+        stage = "require 'src/bootstrap.php'; session_id($argv[1]); $a=app(); $a->session(); $_SESSION['meta_selection']=['selection_id'=>'http-choice','user_id'=>1,'expires_at'=>time()+600,'choices'=>$a->seal(['facebook:85001'=>['key'=>'facebook:85001','network'=>'facebook','external_id'=>'85001','name'=>'Chosen page','page_name'=>'Chosen page','available'=>true,'reason'=>null,'credentials'=>['access_token'=>'never-expose-token','page_id'=>'85001']],'facebook:85002'=>['key'=>'facebook:85002','network'=>'facebook','external_id'=>'85002','name'=>'Unselected page','page_name'=>'Unselected page','available'=>true,'reason'=>null,'credentials'=>['access_token'=>'other-token','page_id'=>'85002']]])];"
+        subprocess.run([php, '-r', stage, cookie.split('=',1)[1]], cwd=root, check=True, capture_output=True)
+        choices_body = request('GET', '/api.php?action=bootstrap')[2]
+        assert b'never-expose-token' not in choices_body and b'other-token' not in choices_body
+        assert len(json.loads(choices_body)['meta_choices']['accounts']) == 2
+        assert request('POST', '/api.php?action=select-meta', {'selection_id':'http-choice','keys':['facebook:85001']})[0] == 422
+        assert request('POST', '/api.php?action=select-meta', {'selection_id':'http-choice','keys':['facebook:85001','facebook:999']}, csrf)[0] == 422
+        assert request('POST', '/api.php?action=select-meta', {'selection_id':'http-choice','keys':['facebook:85001']}, csrf)[0] == 200
+        connected = json.loads(request('GET', '/api.php?action=bootstrap')[2])
+        assert connected['meta_choices'] is None
+        assert [c['name'] for c in connected['channels']] == ['Chosen page']
         status, _, body = request('POST', '/api.php?action=save', {'title': 'HTTP-test', 'caption': 'Svensk text 🧡 <script>inert</script>', 'status': 'draft'}, csrf)
         assert status == 200
         post_id = json.loads(body)['id']

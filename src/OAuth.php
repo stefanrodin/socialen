@@ -18,8 +18,10 @@ final class OAuth
             $params += ['scope' => 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly', 'access_type' => 'offline', 'prompt' => 'consent'];
             return 'https://accounts.google.com/o/oauth2/v2/auth?' . http_build_query($params);
         }
+        unset($_SESSION['meta_selection']);
         if (!empty($config['login_config_id'])) $params['config_id'] = $config['login_config_id'];
-        else $params['scope'] = 'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish';
+        else $params['scope'] = 'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish,business_management';
+        $params['auth_type']='rerequest';
         return 'https://www.facebook.com/' . $this->version() . '/dialog/oauth?' . http_build_query($params);
     }
     public function callback(string $provider): string { return $this->app->url('oauth.php?provider=' . $provider); }
@@ -50,27 +52,67 @@ final class OAuth
         $token['api_checked_at'] = time();
         $this->save('youtube',$channel['id'],$channel['snippet']['title'],$token); return 1;
     }
+    private function pendingMeta(): ?array {
+        $user=$this->app->requireUser(); $pending=$_SESSION['meta_selection']??null;
+        if (!$pending || $pending['user_id']!==(int)$user['id'] || $pending['expires_at']<=time()) { unset($_SESSION['meta_selection']); return null; }
+        return $pending;
+    }
+    public function metaChoices(): ?array {
+        $pending=$this->pendingMeta(); if (!$pending) return null;
+        $choices=$this->app->unseal($pending['choices']);
+        return ['selection_id'=>$pending['selection_id'],'expires_at'=>$pending['expires_at'],'accounts'=>array_map(static fn($c)=>array_intersect_key($c,array_flip(['key','network','name','page_name','available','reason'])),array_values($choices))];
+    }
+    public function cancelMeta(): void { $this->app->requireUser(); unset($_SESSION['meta_selection']); }
+    public function selectMeta(string $selectionId,array $keys): int {
+        $this->app->requirePolicies();
+        $pending=$this->pendingMeta();
+        if (!$pending || !hash_equals($pending['selection_id'],$selectionId)) throw new UserError('Sidvalet har gått ut eller ändrats. Anslut Meta igen.');
+        if (!$keys) throw new UserError('Välj minst en sida eller ett Instagram-konto.');
+        $choices=$this->app->unseal($pending['choices']); $selected=[];
+        foreach ($keys as $key) {
+            if (!is_string($key) || !isset($choices[$key]) || !$choices[$key]['available']) throw new UserError('Ett valt konto saknas i Metas svar eller har inte publiceringsrätt. Hämta kontona igen.');
+            $selected[$key]=$choices[$key];
+        }
+        $this->app->db->beginTransaction();
+        try {
+            foreach ($selected as $choice) $this->save($choice['network'],$choice['external_id'],$choice['name'],$choice['credentials']);
+            $this->app->db->commit();
+        } catch (Throwable $error) { $this->app->db->rollBack(); throw $error; }
+        unset($_SESSION['meta_selection']);
+        return count($selected);
+    }
     private function meta(string $code): int {
         $config = $this->app->config['meta']; $base = 'https://graph.facebook.com/' . $this->version();
         $token = $this->http->request('GET',$base . '/oauth/access_token?' . http_build_query(['client_id'=>$config['app_id'],'client_secret'=>$config['app_secret'],'code'=>$code,'redirect_uri'=>$this->callback('meta')]))['json'];
         if (empty($token['access_token'])) throw new UserError('Meta returnerade ingen åtkomsttoken.');
         $token = $this->http->request('GET',$base . '/oauth/access_token?' . http_build_query(['grant_type'=>'fb_exchange_token','client_id'=>$config['app_id'],'client_secret'=>$config['app_secret'],'fb_exchange_token'=>$token['access_token']]))['json'];
         if (empty($token['access_token'])) throw new UserError('Metas token kunde inte förnyas.');
-        $after = null; $count = 0;
+        $after = null; $choices=[];
         do {
             $params = ['fields'=>'id,name,access_token,tasks,instagram_business_account{id,username}','limit'=>100]; if ($after) $params['after']=$after;
             $response = $this->http->request('GET',$base . '/me/accounts?' . http_build_query($params),['Authorization: Bearer ' . $token['access_token']])['json'];
             foreach ($response['data'] ?? [] as $page) {
-                if (empty($page['access_token']) || !array_intersect(['CREATE_CONTENT','MANAGE','PROFILE_PLUS_CREATE_CONTENT','PROFILE_PLUS_FULL_CONTROL'], $page['tasks'] ?? [])) continue;
-                $creds = ['access_token'=>$page['access_token'],'page_id'=>$page['id']];
-                $this->save('facebook',$page['id'],$page['name'],$creds); ++$count;
-                if (!empty($page['instagram_business_account']['id'])) { $ig=$page['instagram_business_account']; $this->save('instagram',$ig['id'],$ig['username'] ?? $page['name'],$creds); ++$count; }
+                $id=(string)($page['id']??'');
+                if (!preg_match('/^[0-9]{1,190}$/D',$id)) throw new UserError('Meta returnerade en ogiltig sididentitet. Ingen kanal anslöts.');
+                $available=!empty($page['access_token']) && (bool)array_intersect(['CREATE_CONTENT','MANAGE','PROFILE_PLUS_CREATE_CONTENT','PROFILE_PLUS_FULL_CONTROL'],$page['tasks']??[]);
+                $reason=$available?null:(empty($page['access_token'])?'Meta lämnade inte ut publiceringsåtkomst till sidan.':'Din Facebook-profil saknar publiceringsrätt enligt Meta.');
+                $name=(string)($page['name']??$id);
+                $creds=['access_token'=>$page['access_token']??null,'page_id'=>$id];
+                $key='facebook:'.$id;
+                $choices[$key]=['key'=>$key,'network'=>'facebook','external_id'=>$id,'name'=>$name,'page_name'=>$name,'available'=>$available,'reason'=>$reason,'credentials'=>$creds];
+                if (!empty($page['instagram_business_account']['id'])) {
+                    $ig=$page['instagram_business_account']; $igId=(string)$ig['id'];
+                    if (!preg_match('/^[0-9]{1,190}$/D',$igId)) throw new UserError('Meta returnerade en ogiltig Instagram-identitet. Ingen kanal anslöts.');
+                    $key='instagram:'.$igId;
+                    $choices[$key]=['key'=>$key,'network'=>'instagram','external_id'=>$igId,'name'=>(string)($ig['username']??$name),'page_name'=>$name,'available'=>$available,'reason'=>$reason,'credentials'=>$creds];
+                }
             }
+            if (count($choices)>1000) throw new UserError('Fler än 1 000 konton hittades. Begränsa sidåtkomsten hos Meta och anslut igen.');
             $next = isset($response['paging']['next']) ? ($response['paging']['cursors']['after'] ?? null) : null;
             if ($next === $after) $next = null; $after = $next;
-            if ($count > 1000 && $after) throw new UserError('Fler än 1 000 kanaler hittades. Begränsa sidåtkomsten hos Meta och anslut igen.');
         } while ($after);
-        if (!$count) throw new UserError('Ingen Facebook-sida med publiceringsrätt hittades. Instagram behöver vara ett professionellt konto kopplat till en vald sida.');
-        return $count;
+        if (!$choices) throw new UserError('Meta lämnade inte ut några Facebook-sidor. Kontrollera att din Facebook-profil har åtkomst till rätt sida och uppdatera Socialens åtkomst hos Meta.');
+        $_SESSION['meta_selection']=['selection_id'=>bin2hex(random_bytes(16)),'user_id'=>(int)$this->app->requireUser()['id'],'expires_at'=>time()+600,'choices'=>$this->app->seal($choices)];
+        return 0; // Discovery never activates a channel. The user confirms an explicit selection.
     }
 }

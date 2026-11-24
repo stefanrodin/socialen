@@ -11,6 +11,7 @@ try {
         if ($user && $app->hasAcceptedPolicies()) {
             $data['flash']=$_SESSION['flash']??null; unset($_SESSION['flash']);
             $last=$app->one("SELECT setting_value FROM settings WHERE setting_key='last_worker'");
+            $data['meta_choices']=(new OAuth($app))->metaChoices();
             $data+=['posts'=>$app->posts(),'media'=>$app->mediaList(),'channels'=>$app->channels(),'last_worker'=>$last['setting_value']??null,'providers'=>[
                 'google'=>!empty($app->config['google']['client_id'])&&!empty($app->config['google']['client_secret']),
                 'meta'=>!empty($app->config['meta']['app_id'])&&!empty($app->config['meta']['app_secret']),
@@ -33,6 +34,10 @@ try {
         case 'save': jsonResponse(['id'=>$app->savePost($input)]);
         case 'cancel': $app->cancelPost((int)($input['id']??0)); jsonResponse(['ok'=>true]);
         case 'connect': jsonResponse(['url'=>(new OAuth($app))->start((string)($input['provider']??''))]);
+        case 'select-meta':
+            if(!is_array($input['keys']??null))throw new UserError('Välj de konton du vill ansluta.');
+            jsonResponse(['ok'=>true,'count'=>(new OAuth($app))->selectMeta((string)($input['selection_id']??''),$input['keys'])]);
+        case 'cancel-meta': (new OAuth($app))->cancelMeta(); jsonResponse(['ok'=>true]);
         case 'disconnect':
             if ($app->demo) throw new UserError('Demokanalerna kan inte kopplas från.');
             $channel=$app->one('SELECT network FROM channels WHERE id=?',[(int)($input['id']??0)]);

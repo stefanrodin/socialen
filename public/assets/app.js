@@ -73,6 +73,7 @@ function render() {
     channels: () => shell(channelsView(), 'Dina kanaler', 'Koppla ihop din arbetsyta med platserna där du publicerar.'),
   };
   $('#app').innerHTML = views[view]();
+  bindMetaAccountPicker();
   $('#search')?.addEventListener('input', (event) => { query = event.target.value; const position = event.target.selectionStart; render(); $('#search').focus(); $('#search').setSelectionRange(position, position); });
   $('#filter')?.addEventListener('change', (event) => { filter = event.target.value; render(); });
 }
@@ -110,8 +111,32 @@ function overview() {
 function drafts() { const posts = filteredPosts().filter((p) => p.status === 'draft'); return `<section class="content-panel">${filters()}${posts.length ? listPosts(posts) : empty('Alla bra inlägg börjar med en idé.', 'Spara en rubrik, en bild eller en tanke. Du behöver inte bestämma allt på en gång.', 'new', 'Skapa ditt första utkast', 'draft')}</section>`; }
 function mediaView() { return `<section class="content-panel"><div class="section-heading"><div><h2>Allt ditt material <span class="count-label">${data.media.length}</span></h2><p>JPEG, PNG, WebP och MP4 · högst ${data.upload_limit_mb} MB per fil</p></div><span class="muted">Bilder sparas som JPEG</span></div>${data.media.length ? `<div class="media-grid">${data.media.map((m) => `<button class="media-tile" data-media-preview="${m.id}"><span class="media-visual">${mediaPreview(m)}${m.mime === 'video/mp4' ? '<span class="video-label">MP4</span>' : ''}</span><strong>${esc(m.name)}</strong><small>${m.width ? `${m.width} × ${m.height} · ` : ''}${formatBytes(m.bytes)}</small></button>`).join('')}</div>` : empty('Ditt nästa inlägg börjar här.', 'Ladda upp bilder och videor så finns de redo när inspirationen kommer.', 'upload', 'Ladda upp media', 'image')}</section>`; }
 function formatBytes(value) { return Number(value) >= 1048576 ? `${(Number(value) / 1048576).toFixed(1)} MB` : `${Math.ceil(Number(value) / 1024)} kB`; }
+function metaAccountPicker() {
+  const choice = data.meta_choices;
+  if (!choice) return '';
+  const accounts = choice.accounts;
+  return `<section class="content-panel meta-picker" aria-labelledby="meta-picker-title"><div class="section-heading"><div><h2 id="meta-picker-title">Välj sidor och Instagram-konton</h2><p>Markera bara de konton du vill ansluta till Socialen.</p></div>${icon('channels')}</div><form id="meta-selection-form" data-selection-id="${esc(choice.selection_id)}"><p>Meta har lämnat ut ${accounts.length} konto${accounts.length === 1 ? '' : 'n'}. Inget nytt konto ansluts förrän du bekräftar ditt val.</p><label class="field-label">Sök bland dina konton<input id="meta-account-search" type="search" placeholder="Sidans namn eller Instagram-användarnamn"></label><div class="meta-account-list">${accounts.map((account) => `<label class="meta-choice ${account.available ? '' : 'unavailable'}" data-search="${esc(account.name + ' ' + account.page_name + ' ' + networkName[account.network])}"><input type="checkbox" name="meta_accounts" value="${esc(account.key)}" ${account.available ? '' : 'disabled'}>${networkIcon(account.network)}<span><strong>${esc(account.name)}</strong><small>${account.network === 'instagram' ? 'Instagram · kopplad till ' + esc(account.page_name) : 'Facebook-sida'}</small>${account.reason ? `<small class="meta-choice-reason">${esc(account.reason)}</small>` : ''}</span></label>`).join('')}</div><div class="meta-access-help"><strong>Saknas en sida?</strong><p>Listan innehåller de konton som Meta har lämnat ut till Socialen. Kontrollera att du är inloggad med rätt Facebook-profil och har publiceringsåtkomst till sidan. Vid behov ändrar du Socialens åtkomst i Facebooks företagsintegrationer och hämtar kontona igen.</p><button type="button" class="text-link" data-connect="meta">Hämta konton igen hos Meta</button></div><div id="meta-selection-error" class="form-error" role="alert"></div><div class="meta-picker-actions"><button type="button" class="button secondary" data-meta-cancel="1">Avbryt</button><button type="submit" class="button primary" ${accounts.some((account) => account.available) ? '' : 'disabled'}>Anslut valda konton</button></div></form></section>`;
+}
+function bindMetaAccountPicker() {
+  const form = $('#meta-selection-form');
+  if (!form) return;
+  $('#meta-account-search').addEventListener('input', (event) => {
+    const search = event.target.value.trim().toLocaleLowerCase('sv');
+    form.querySelectorAll('.meta-choice').forEach((row) => { row.hidden = !row.dataset.search.toLocaleLowerCase('sv').includes(search); });
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const keys = new FormData(form).getAll('meta_accounts');
+    if (!keys.length) { $('#meta-selection-error').textContent = 'Välj minst en sida eller ett Instagram-konto.'; return; }
+    const button = $('button[type="submit"]', form); button.disabled = true;
+    try {
+      const result = await api('select-meta', { selection_id: form.dataset.selectionId, keys });
+      await refresh(); toast(`${result.count} valda konton anslöts.`);
+    } catch (error) { $('#meta-selection-error').textContent = error.message; button.disabled = false; }
+  });
+}
 function channelsView() {
-  return `<div class="channel-grid">${Object.entries(networkName).map(([network, name]) => {
+  return `${metaAccountPicker()}<div class="channel-grid">${Object.entries(networkName).map(([network, name]) => {
     const channels = data.channels.filter((c) => c.network === network); const provider = network === 'youtube' ? 'google' : 'meta';
     return `<section class="channel-card"><div class="channel-card-top">${networkIcon(network)}<h2>${name}</h2></div><p>${network === 'instagram' ? 'Bilder, bildkaruseller och Reels för ditt professionella konto.' : network === 'facebook' ? 'Text, bilder och video till dina Facebook-sidor.' : 'Videor till din YouTube-kanal, med vald synlighet.'}</p><div class="connected-list">${channels.map((c) => `<div class="connected-channel"><span class="channel-avatar">${esc(c.name.charAt(0))}</span><div><strong>${esc(c.name)}</strong><small>${data.demo ? 'Demokanal · ingen publicering' : Number(c.active) ? 'Ansluten' : 'Frånkopplad'}</small></div>${!data.demo && (Number(c.active) || network === 'youtube') ? `<button class="text-button danger" data-disconnect="${c.id}">${network === 'youtube' ? 'Koppla från och radera Google-data' : 'Koppla från'}</button>` : ''}</div>`).join('') || '<div class="not-connected">Ingen kanal ansluten ännu</div>'}</div><button class="button secondary full" data-connect="${provider}">${icon('plus')}${channels.length ? 'Anslut eller förnya kanal' : 'Anslut ' + name}</button><small class="provider-note">${data.demo ? 'Anslutningar aktiveras i din riktiga installation.' : data.providers[provider] ? 'Appuppgifter finns. Fortsätt till plattformen.' : 'Appuppgifter behöver fyllas i före anslutning.'}</small></section>`;
   }).join('')}</div><section class="content-panel setup-panel"><div class="section-heading"><div><h2>Redo för automatisk publicering?</h2><p>Din arbetsyta behöver två saker för att kunna arbeta åt dig.</p></div>${icon('settings')}</div><div class="setup-columns"><div><h3>Plattformarnas appanslutningar</h3><p>Fyll i Google- och Meta-uppgifterna i serverns konfiguration. Instagram ansluts via en Facebook-sida. Kontot behöver vara professionellt.</p><p class="muted">Googles testläge kan ge förnyelsetoken med sju dagars livslängd. Följ installationsguiden för varaktig anslutning.</p></div><div><h3>Publiceringsjobb via cron</h3><p>Kör <code>bin/worker.php</code> regelbundet från DirectAdmin. Webbläsaren behöver inte vara öppen.</p><div class="worker-status">${icon(data.last_worker ? 'check' : 'clock')}<span>${data.last_worker ? 'Senast kört ' + esc(localInput(data.last_worker).replace('T', ' ')) : 'Inget publiceringsjobb har registrerats ännu.'}</span></div></div></div></section>`;
@@ -186,6 +211,7 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.post) { openEditor(data.posts.find((p) => String(p.id) === target.dataset.post)); return; }
   if (target.dataset.copy) { openEditor(data.posts.find((p) => String(p.id) === target.dataset.copy), null, true); return; }
   if (target.dataset.pick || target.dataset.unpick) { const id = Number(target.dataset.pick || target.dataset.unpick); if (chosenMedia.includes(id)) chosenMedia = chosenMedia.filter((x) => x !== id); else if (chosenMedia.length < 10) chosenMedia.push(id); else toast('Välj högst 10 filer.', true); renderChosenMedia(); return; }
+  if (target.dataset.metaCancel) { try { await api('cancel-meta', {}); await refresh(); toast('Sidvalet avbröts.'); } catch (error) { toast(error.message, true); } return; }
   if (target.dataset.connect) { try { const result = await api('connect', { provider: target.dataset.connect }); location.assign(result.url); } catch (e) { toast(e.message, true); } return; }
   if (target.dataset.disconnect) {
     const channel = data.channels.find((c) => String(c.id) === target.dataset.disconnect);

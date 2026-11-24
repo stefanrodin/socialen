@@ -20,7 +20,7 @@ function rejects(callable $fn,string $contains): void { try { $fn(); } catch (Us
 $root=sys_get_temp_dir().'/publicera-test-'.bin2hex(random_bytes(5)); mkdir($root.'/storage/uploads',0700,true);
 $dsn=getenv('PUBLICERA_TEST_DSN')?:'sqlite:'.$root.'/storage/tests.sqlite';
 if (!str_starts_with($dsn,'sqlite:')&&!preg_match('/dbname=publicera_test_[a-z0-9]+(?:;|$)/',$dsn)) throw new RuntimeException('MySQL tests require a dedicated database named publicera_test_<suffix>.');
-$app=new App($root,['url'=>'https://publicera.example','timezone'=>'Europe/Stockholm','key'=>base64_encode(random_bytes(32)),'database'=>['dsn'=>$dsn,'user'=>getenv('PUBLICERA_TEST_USER')?:null,'password'=>getenv('PUBLICERA_TEST_PASSWORD')?:null],'upload_limit_mb'=>100,'google'=>['client_id'=>'test','client_secret'=>'test'],'meta'=>['version'=>'v27.0']],false);
+$app=new App($root,['url'=>'https://publicera.example','timezone'=>'Europe/Stockholm','key'=>base64_encode(random_bytes(32)),'database'=>['dsn'=>$dsn,'user'=>getenv('PUBLICERA_TEST_USER')?:null,'password'=>getenv('PUBLICERA_TEST_PASSWORD')?:null],'upload_limit_mb'=>100,'google'=>['client_id'=>'test','client_secret'=>'test'],'meta'=>['version'=>'v27.0','app_id'=>'test-app','app_secret'=>'test-secret']],false);
 $app->migrate(); $app->migrate(); $app->session();
 $passed=0;
 function test(string $name,callable $fn): void { global $passed; $fn(); ++$passed; echo 'PASS '.$name.PHP_EOL; }
@@ -62,4 +62,62 @@ test('pending Google deletion expires within seven days even while revocation is
 test('a failed Google revoke cannot starve another expired deletion request',function()use($app){$a=channel('youtube',['access_token'=>'a','refresh_token'=>'a','expires_at'=>time()+3600]);$b=channel('youtube',['access_token'=>'b','refresh_token'=>'b','expires_at'=>time()+3600]);foreach([$a,$b] as $id)(new GoogleAccess($app,new FakeHttp([new RemoteFailure('unavailable',false,503)])))->disconnect($id);$app->query('UPDATE settings SET setting_value=? WHERE setting_key=?',[(string)(time()-8*86400),'google_delete_'.$b]);$http=new FakeHttp([new RemoteFailure('unavailable',false,503)]);(new GoogleAccess($app,$http))->maintainOne();check(!$app->one('SELECT id FROM channels WHERE id=?',[$b]),'Expired deletion starved behind another request');check($app->one('SELECT id FROM channels WHERE id=?',[$a])!==null,'A pending recent request was deleted prematurely');(new GoogleAccess($app,new FakeHttp([['json'=>[]]])))->maintainOne();check(!$app->one('SELECT id FROM channels WHERE id=?',[$a]),'Pending request never completed');});
 
 test('pending Google revocation retries rotate between channels',function()use($app){$a=channel('youtube',['access_token'=>'rotate-a','refresh_token'=>'rotate-a','expires_at'=>time()+3600]);$b=channel('youtube',['access_token'=>'rotate-b','refresh_token'=>'rotate-b','expires_at'=>time()+3600]);foreach([$a,$b] as $id)(new GoogleAccess($app,new FakeHttp([new RemoteFailure('unavailable',false,503)])))->disconnect($id);$app->query("UPDATE settings SET setting_value='' WHERE setting_key='google_revoke_cursor'");$http=new FakeHttp([new RemoteFailure('unavailable',false,503),new RemoteFailure('unavailable',false,503)]);$access=new GoogleAccess($app,$http);$access->maintainOne();$access->maintainOne();check(count(array_unique(array_column($http->calls,2)))===2,'Same pending token retried while another starved');foreach([$a,$b] as $id)(new GoogleAccess($app,new FakeHttp([['json'=>[]]])))->disconnect($id);});
+function metaDiscovery(array $pages,array $more=[]): OAuth {
+    global $app;
+    $_SESSION['oauth']=['provider'=>'meta','state'=>'meta-state','expires'=>time()+600];
+    $http=new FakeHttp(array_merge([['json'=>['access_token'=>'short-user-token']],['json'=>['access_token'=>'long-user-token']],['json'=>$pages]],$more));
+    $oauth=new OAuth($app,$http);
+    check($oauth->finish('meta',['state'=>'meta-state','code'=>'test-code'])===0,'Discovery connected accounts immediately');
+    return $oauth;
+}
+function metaPage(string $id,string $name,bool $instagram=false): array {
+    $page=['id'=>$id,'name'=>$name,'access_token'=>'page-secret-'.$id,'tasks'=>['CREATE_CONTENT']];
+    if($instagram)$page['instagram_business_account']=['id'=>'9'.$id,'username'=>strtolower($name)];
+    return $page;
+}
+test('Meta discovery paginates without connecting and confirms only explicitly selected accounts',function()use($app){
+    $before=(int)$app->one('SELECT COUNT(*) AS n FROM channels')['n'];
+    $oauth=metaDiscovery(['data'=>[metaPage('81001','Esters Marina')],'paging'=>['next'=>'https://graph.facebook.com/v27.0/me/accounts?after=next','cursors'=>['after'=>'next']]], [['json'=>['data'=>[metaPage('81002','Styverz',true)]]]]);
+    check((int)$app->one('SELECT COUNT(*) AS n FROM channels')['n']===$before,'Discovery wrote channels');
+    $choices=$oauth->metaChoices();check(count($choices['accounts'])===3,'Pagination or linked Instagram lost');
+    check(!str_contains(json_encode($choices),'page-secret')&&!str_contains(json_encode($_SESSION['meta_selection']),'page-secret'),'Token exposed in choices or session');
+    check($oauth->selectMeta($choices['selection_id'],['facebook:81002','instagram:981002'])===2,'Wrong selection count');
+    check(!$app->one('SELECT id FROM channels WHERE external_id=?',['81001']),'Unselected page connected');
+    check($app->one('SELECT name FROM channels WHERE external_id=?',['81002'])['name']==='Styverz','Selected page missing');
+    check($oauth->metaChoices()===null,'Confirmed selection can be reused');
+});
+test('Meta selection rejects stale empty unavailable and foreign choices before writing',function()use($app){
+    $blocked=metaPage('82002','Read only');$blocked['tasks']=['ANALYZE'];
+    $oauth=metaDiscovery(['data'=>[metaPage('82001','Allowed'),$blocked]]);$choices=$oauth->metaChoices();
+    check(!$choices['accounts'][1]['available']&&$choices['accounts'][1]['reason']!==null,'Unavailable page hidden or selectable');
+    rejects(fn()=>$oauth->selectMeta('stale',['facebook:82001']),'ändrats');
+    rejects(fn()=>$oauth->selectMeta($choices['selection_id'],[]),'minst en');
+    rejects(fn()=>$oauth->selectMeta($choices['selection_id'],['facebook:82001','facebook:999']),'saknas');
+    rejects(fn()=>$oauth->selectMeta($choices['selection_id'],['facebook:82002']),'publiceringsrätt');
+    check(!$app->one('SELECT id FROM channels WHERE external_id=?',['82001']),'Rejected selection partially saved');
+    $_SESSION['meta_selection']['expires_at']=time()-1;
+    rejects(fn()=>$oauth->selectMeta($choices['selection_id'],['facebook:82001']),'gått ut');
+    check(!isset($_SESSION['meta_selection']),'Expired credentials retained');
+});
+test('Meta cancellation and account switching discard pending credentials without changing existing channels',function()use($app){
+    $existing=$app->one('SELECT * FROM channels WHERE external_id=?',['81002']);
+    $oauth=metaDiscovery(['data'=>[metaPage('81002','New title')]]);$oauth->cancelMeta();
+    check($oauth->metaChoices()===null,'Cancelled selection retained');
+    check($app->one('SELECT * FROM channels WHERE id=?',[$existing['id']])===$existing,'Cancellation changed existing channel');
+    $oauth=metaDiscovery(['data'=>[metaPage('83001','Other account')]]);
+    $_SESSION['meta_selection']['user_id']=9999;
+    check($oauth->metaChoices()===null,'Another user received pending credentials');
+});
+test('Meta discovery failure after a page never creates a partial connection',function()use($app){
+    $_SESSION['oauth']=['provider'=>'meta','state'=>'failing-state','expires'=>time()+600];
+    $http=new FakeHttp([['json'=>['access_token'=>'short']],['json'=>['access_token'=>'long']],['json'=>['data'=>[metaPage('84001','First page')],'paging'=>['next'=>'next-page','cursors'=>['after'=>'next']]]],new RemoteFailure('temporary failure')]);
+    try {(new OAuth($app,$http))->finish('meta',['state'=>'failing-state','code'=>'code']);throw new RuntimeException('Expected remote failure');}catch(RemoteFailure){}
+    check(!$app->one('SELECT id FROM channels WHERE external_id=?',['84001']),'Partial connection persisted');
+    check(!isset($_SESSION['meta_selection']),'Incomplete discovery exposed');
+});
+test('Meta login requests business-owned Page visibility and reasks declined access',function()use($app){
+    $url=(new OAuth($app))->start('meta');parse_str(parse_url($url,PHP_URL_QUERY),$params);
+    check(in_array('business_management',explode(',',$params['scope']),true),'Business-owned Pages can be omitted');
+    check($params['auth_type']==='rerequest','Declined permissions cannot be renewed');
+});
 echo "\n$passed workflow tests passed on ".$app->db->getAttribute(PDO::ATTR_DRIVER_NAME).". No real platform requests were sent.\n";
