@@ -88,7 +88,7 @@ Källor: [OAuth för webbserver](https://developers.google.com/identity/protocol
 
 1. Skapa en Meta-app med ett lämpligt Facebook Login for Business-flöde.
 2. Registrera exakt callback-adress: `https://social.dindomän.se/oauth.php?provider=meta`.
-3. Ange app-ID och apphemlighet i `config.php`. Graph-version är explicit konfigurerbar; nuvarande standard är `v27.0`.
+3. Ange app-ID och apphemlighet i `config.php`. Graph-version är explicit konfigurerbar; nuvarande standard är `v27.0`. Alternativt kör du `bash bin/configure-meta.sh APP_ID CONFIGURATION_ID` i den interaktiva SSH-terminalen. Skriptet frågar efter apphemligheten med dold inmatning, sparar en privat säkerhetskopia i `storage/` och behåller Google-, databas- och övriga inställningar. Hemligheten ska inte skrivas som argument eller klistras in i en chatt.
 4. Om ditt loginflöde kräver ett konfigurations-ID, ange `login_config_id`. Konfigurationen ska använda **User access token**, eftersom appen därefter hämtar Page-token.
 5. Begär/konfigurera `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic` och `instagram_content_publish` för de funktioner du ska använda. Följ Metas aktuella krav på appgranskning och åtkomstnivå för dina konton. Videobehörigheter kan kräva komplettering beroende på appens produkt/åtkomst; API-fel visas vid publiceringen.
 6. Koppla ditt professionella Instagram-konto till en Facebook-sida du får publicera till.
