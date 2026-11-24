@@ -1,0 +1,10 @@
+{
+  "host": "prime3.inleed.net",
+  "port": 2020,
+  "user": "rondit",
+  "identity_file": "~/.ssh/EXISTING_PRIVATE_KEY",
+  "app_root": "/home/rondit/domains/socialen.rondit.se/current",
+  "php": "/usr/local/php81/bin/php",
+  "actor_id": 1,
+  "timezone": "Europe/Stockholm"
+}

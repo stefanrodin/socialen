@@ -120,4 +120,26 @@ test('Meta login requests business-owned Page visibility and reasks declined acc
     check(in_array('business_management',explode(',',$params['scope']),true),'Business-owned Pages can be omitted');
     check($params['auth_type']==='rerequest','Declined permissions cannot be renewed');
 });
+require dirname(__DIR__).'/src/Admin.php';
+test('SSH admin previews, receipts and versions are atomic on this database',function()use($app){
+    $admin=new Admin($app); $stream=fopen('php://temp','r+');
+    $channel=channel('facebook',['access_token'=>'cli-test-token']);
+    $actor=(int)$app->one('SELECT id FROM users ORDER BY id LIMIT 1')['id'];
+    $key='policies_user_'.$actor;
+    if($app->one('SELECT setting_key FROM settings WHERE setting_key=?',[$key]))$app->query('UPDATE settings SET setting_value=? WHERE setting_key=?',[Policies::VERSION,$key]);
+    else $app->query('INSERT INTO settings(setting_key,setting_value) VALUES(?,?)',[$key,Policies::VERSION]);
+    $request=['actor_id'=>$actor,'action'=>'save','request_id'=>'database-cli-create','post'=>['title'=>'CLI transaction','caption'=>'åäö','status'=>'scheduled','channel_ids'=>[$channel],'scheduled_at'=>(new DateTimeImmutable('+1 day',new DateTimeZone('Europe/Stockholm')))->format('Y-m-d\TH:i'),'timezone'=>'Europe/Stockholm']];
+    $count=(int)$app->one('SELECT COUNT(*) AS n FROM posts')['n'];
+    $admin->dispatch($request,$stream);check((int)$app->one('SELECT COUNT(*) AS n FROM posts')['n']===$count,'Preview persisted a post');
+    $saved=$admin->dispatch($request+['apply'=>true],$stream)['post'];$id=(int)$saved['id'];
+    check($admin->dispatch($request+['apply'=>true],$stream)['replayed'],'Receipt did not deduplicate');
+    check((int)$app->one('SELECT COUNT(*) AS n FROM posts')['n']===$count+1,'Duplicate post created');
+    $move=['actor_id'=>$actor,'action'=>'reschedule','id'=>$id,'version'=>1,'scheduled_at'=>(new DateTimeImmutable('+2 days',new DateTimeZone('Europe/Stockholm')))->format('Y-m-d\TH:i'),'request_id'=>'database-cli-reschedule','apply'=>true];
+    check((int)$admin->dispatch($move,$stream)['post']['version']===2,'Reschedule did not increment version');
+    $move['request_id']='database-cli-stale';rejects(fn()=>$admin->dispatch($move,$stream),'annan vy');
+    $count=(int)$app->one('SELECT COUNT(*) AS n FROM posts')['n'];
+    rejects(fn()=>$app->savePost(['title'=>'Callback rollback','status'=>'draft'],false,fn()=>throw new UserError('receipt failure')),'receipt failure');
+    check((int)$app->one('SELECT COUNT(*) AS n FROM posts')['n']===$count,'Receipt failure leaked a post');
+    fclose($stream);
+});
 echo "\n$passed workflow tests passed on ".$app->db->getAttribute(PDO::ATTR_DRIVER_NAME).". No real platform requests were sent.\n";

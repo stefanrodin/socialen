@@ -55,6 +55,8 @@ jobs:
         run: php tests/run.php
       - name: HTTP workflows
         run: python3 tests/http_flow.py
+      - name: SSH administration workflows
+        run: python3 tests/admin_flow.py
       - name: Meta configuration setup
         run: python3 tests/configure_meta.py
       - name: Deployment and rollback tests

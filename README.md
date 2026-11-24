@@ -114,6 +114,12 @@ Kör först `php bin/worker.php` manuellt och kontrollera **Kanaler → driftsta
 
 Källa: [Inleeds cron-guide](https://inleed.se/helpcenter/cron-jobbet-kors-inte).
 
+## Administration via SSH
+
+`bin/admin.php` och klienten `bin/socialen.py` hanterar kö, kanaler, filöverföring, utkast och schemaläggning via den befintliga SSH-inloggningen. Ändringar förhandsgranskas som standard och sparas först med `--apply`. Samma postvalidering och versionslås används som i webbgränssnittet. Stabilt request-ID och atomiska kvitton skyddar återförsök från att skapa dubbla poster. Filer strömmas och SHA256-kontrolleras. Inget nytt publikt administrations-API eller nytt SSH-tillträde införs.
+
+Se [terminalguiden](docs/terminal.md) och [anslutningsexemplet](docs/socialen-ssh.example.json). Administrationskommandot startar ingen publicering; det vanliga cron-jobbet fortsätter att sköta godkända scheman.
+
 ## När något går fel
 
 - **Misslyckat:** plattformen eller valideringen gav ett känt fel. Läs meddelandet, åtgärda orsaken och skapa vid behov en ny kopia.

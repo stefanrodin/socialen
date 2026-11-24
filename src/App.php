@@ -115,28 +115,37 @@ final class App
     public function mediaList(): array { $rows = $this->all('SELECT id,name,mime,bytes,width,height,created_at FROM media ORDER BY id DESC LIMIT 500'); foreach ($rows as &$row) $row['url'] = 'media.php?id=' . $row['id']; return $rows; }
     public function upload(array $file): array {
         if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) throw new UserError('Uppladdningen misslyckades. Kontrollera filstorleken och serverns upload_max_filesize/post_max_size.');
-        $size = filesize($file['tmp_name']);
+        return $this->storeMedia((string)$file['tmp_name'], (string)$file['name'], false);
+    }
+    public function importMedia(string $source, string $name): array {
+        $stage = realpath($this->root . '/storage/cli-staging');
+        $real = realpath($source);
+        if (PHP_SAPI !== 'cli' || !$stage || !$real || !str_starts_with($real, $stage . DIRECTORY_SEPARATOR) || is_link($source)) throw new UserError('Terminalimport kräver en privat mellanlagrad fil.');
+        return $this->storeMedia($real, $name, true);
+    }
+    private function storeMedia(string $sourceFile, string $originalName, bool $fromCli): array {
+        $size = filesize($sourceFile);
         if (!$size || $size > (int)$this->config['upload_limit_mb'] * 1048576) throw new UserError('Filen är för stor. Appens gräns är ' . $this->config['upload_limit_mb'] . ' MB.');
-        $mime = (new finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
+        $mime = (new finfo(FILEINFO_MIME_TYPE))->file($sourceFile);
         if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp', 'video/mp4'], true)) throw new UserError('Välj en JPEG-, PNG-, WebP-bild eller en MP4-video.');
         $folder = $this->root . '/storage/uploads';
         if (!is_dir($folder) && !mkdir($folder, 0700, true) && !is_dir($folder)) throw new RuntimeException('Uppladdningsmappen kunde inte skapas.');
-        $name = basename(str_replace('\\', '/', (string)$file['name']));
+        $name = basename(str_replace('\\', '/', $originalName));
         if (mb_strlen($name) > 240) $name = mb_substr($name, 0, 230);
         $path = bin2hex(random_bytes(20)) . ($mime === 'video/mp4' ? '.mp4' : '.jpg');
         $width = $height = null;
         if (str_starts_with($mime, 'image/')) {
-            $dimensions = getimagesize($file['tmp_name']);
+            $dimensions = getimagesize($sourceFile);
             if (!$dimensions || $dimensions[0] * $dimensions[1] > 24000000) throw new UserError('Bilden får innehålla högst 24 megapixlar.');
             $limit=ini_get('memory_limit'); $unit=strtolower(substr($limit,-1));
             $memoryLimit=(int)$limit*match($unit){'g'=>1073741824,'m'=>1048576,'k'=>1024,default=>1};
             $estimated=$dimensions[0]*$dimensions[1]*12 + min($dimensions[0],2048)*min($dimensions[1],2048)*5 + $size*2 + 8388608;
             if ($memoryLimit>0 && memory_get_usage(true)+$estimated>$memoryLimit) throw new UserError('Bilden kräver mer arbetsminne än webbhotellet tillåter. Minska bildens pixelmått och ladda upp igen.');
             if (!extension_loaded('gd')) throw new UserError('PHP-tillägget GD behöver aktiveras för bilder.');
-            $source = imagecreatefromstring(file_get_contents($file['tmp_name']));
+            $source = imagecreatefromstring(file_get_contents($sourceFile));
             if (!$source) throw new UserError('Bilden kunde inte läsas.');
             if ($mime === 'image/jpeg' && function_exists('exif_read_data')) {
-                $exif = @exif_read_data($file['tmp_name']); $orientation = (int)($exif['Orientation'] ?? 1);
+                $exif = @exif_read_data($sourceFile); $orientation = (int)($exif['Orientation'] ?? 1);
                 if (in_array($orientation, [2,4,5,7], true)) imageflip($source, in_array($orientation, [2,5,7], true) ? IMG_FLIP_HORIZONTAL : IMG_FLIP_VERTICAL);
                 $angle = match ($orientation) { 3 => 180, 5,6 => -90, 7,8 => 90, default => 0 };
                 if ($angle) { $rotated = imagerotate($source, $angle, 0); imagedestroy($source); $source = $rotated; }
@@ -146,13 +155,13 @@ final class App
             $output = imagecreatetruecolor($width, $height); imagefill($output, 0, 0, imagecolorallocate($output, 255,255,255)); imagecopyresampled($output, $source, 0,0,0,0,$width,$height,imagesx($source),imagesy($source));
             $saved = imagejpeg($output, $folder . '/' . $path, 90); imagedestroy($source); imagedestroy($output);
             if (!$saved) throw new RuntimeException('Bilden kunde inte sparas.'); $mime = 'image/jpeg';
-        } elseif (!move_uploaded_file($file['tmp_name'], $folder . '/' . $path)) throw new RuntimeException('Videon kunde inte sparas.');
+        } elseif (!($fromCli ? rename($sourceFile, $folder . '/' . $path) : move_uploaded_file($sourceFile, $folder . '/' . $path))) throw new RuntimeException('Videon kunde inte sparas.');
         chmod($folder . '/' . $path, 0600);
         try { $this->query('INSERT INTO media(name,path,mime,bytes,width,height,public_key,created_at) VALUES(?,?,?,?,?,?,?,?)', [$name, $path, $mime, filesize($folder . '/' . $path), $width, $height, bin2hex(random_bytes(32)), $this->now()]); }
         catch (Throwable $e) { unlink($folder . '/' . $path); throw $e; }
         return $this->getMedia((int)$this->db->lastInsertId());
     }
-    public function savePost(array $input): int {
+    public function savePost(array $input, bool $preview = false, ?callable $onSaved = null): int {
         $title = trim((string)($input['title'] ?? '')); $caption = trim((string)($input['caption'] ?? ''));
         if ($title === '' || mb_strlen($title) > 100) throw new UserError('Ge inlägget en rubrik på högst 100 tecken.');
         if (mb_strlen($caption) > 60000) throw new UserError('Texten är för lång.');
@@ -190,12 +199,15 @@ final class App
                 if (!$old) throw new UserError('Inlägget finns inte.');
                 if ((int)($input['version'] ?? 0) !== (int)$old['version']) throw new UserError('Inlägget har ändrats i en annan vy. Ladda om och försök igen.');
                 if ($this->one("SELECT id FROM publications WHERE post_id=? AND (status NOT IN ('pending','cancelled') OR state_json<>'{}') LIMIT 1", [$id])) throw new UserError('Publiceringen har påbörjats. Skapa en kopia för att göra ett nytt inlägg.');
+                if ($preview) { $this->db->rollBack(); return $id; }
                 $this->query('UPDATE posts SET title=?,caption=?,media_json=?,scheduled_at=?,timezone=?,status=?,visibility=?,made_for_kids=?,version=version+1,updated_at=? WHERE id=?', [$title,$caption,json_encode($mediaIds),$scheduled,$timezone,$status,$visibility,$madeForKids,$this->now(),$id]);
                 $this->query('DELETE FROM publications WHERE post_id=?', [$id]);
             } else {
+                if ($preview) { $this->db->rollBack(); return 0; }
                 $this->query('INSERT INTO posts(title,caption,media_json,scheduled_at,timezone,status,visibility,made_for_kids,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)', [$title,$caption,json_encode($mediaIds),$scheduled,$timezone,$status,$visibility,$madeForKids,$this->now(),$this->now()]); $id = (int)$this->db->lastInsertId();
             }
             foreach ($channels as $channel) $this->query('INSERT INTO publications(post_id,channel_id,status,state_json,next_at,updated_at) VALUES(?,?,?,?,?,?)', [$id,$channel['id'],'pending','{}',$scheduled ?? $this->now(),$this->now()]);
+            if ($onSaved) $onSaved($id);
             $this->db->commit(); return $id;
         } catch (Throwable $e) { $this->db->rollBack(); throw $e; }
     }

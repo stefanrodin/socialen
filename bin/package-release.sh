@@ -7,7 +7,7 @@ revision=$(git -C "$root" rev-parse HEAD)
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 # Only committed application files enter a release; never config.php or storage.
-git -C "$root" archive "$revision" src public bin config.example.php README.md | tar -xf - -C "$stage"
+git -C "$root" archive "$revision" src public bin docs config.example.php README.md | tar -xf - -C "$stage"
 printf '%s\n' "$revision" > "$stage/REVISION"
-tar -czf "$output" -C "$stage" src public bin config.example.php README.md REVISION
+tar -czf "$output" -C "$stage" src public bin docs config.example.php README.md REVISION
 echo "Packaged $revision"
